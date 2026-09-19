@@ -1,0 +1,6 @@
+{
+  "name": "TalkTalk",
+  "description": "Your knowledge. One intelligent conversation. AI-powered knowledge assistant for documents, synthesis, and grounded reasoning.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
