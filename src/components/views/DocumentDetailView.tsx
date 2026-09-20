@@ -9,14 +9,52 @@ import {
   Tag, 
   Clock, 
   CheckCircle2, 
+  AlertCircle,
+  AlertTriangle,
   BookOpen, 
   Layers, 
   Copy, 
   Check,
   Search
 } from 'lucide-react';
-import { Document, CitationSource } from '../../types';
+import { DocumentStatus, Document, CitationSource } from '../../types';
 import { aiService } from '../../services/aiService';
+
+// ─── Status Badge ─────────────────────────────────────────────────────────────
+const DocumentStatusBadge: React.FC<{ status: DocumentStatus }> = ({ status }) => {
+  if (status === 'ready') {
+    return (
+      <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-[#10B981]/15 text-[#10B981] border border-[#10B981]/30 flex items-center gap-1">
+        <CheckCircle2 className="w-2.5 h-2.5" />
+        Grounded &amp; Ready
+      </span>
+    );
+  }
+  if (status === 'needs_ocr') {
+    return (
+      <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-[#F59E0B]/15 text-[#FCD34D] border border-[#F59E0B]/30 flex items-center gap-1">
+        <AlertTriangle className="w-2.5 h-2.5" />
+        Needs OCR
+      </span>
+    );
+  }
+  if (status === 'extraction_failed' || status === 'failed') {
+    return (
+      <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-[#EF4444]/15 text-[#FCA5A5] border border-[#EF4444]/30 flex items-center gap-1">
+        <AlertCircle className="w-2.5 h-2.5" />
+        Extraction Failed
+      </span>
+    );
+  }
+  // uploading / processing / indexing
+  return (
+    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-[#6366F1]/15 text-[#C0C1FF] border border-[#6366F1]/30 flex items-center gap-1">
+      <Sparkles className="w-2.5 h-2.5 animate-spin" />
+      Processing
+    </span>
+  );
+};
+
 
 interface DocumentDetailViewProps {
   document: Document;
@@ -110,10 +148,7 @@ export const DocumentDetailView: React.FC<DocumentDetailViewProps> = ({
               <h1 className="text-xl font-display font-bold text-white tracking-tight">
                 {document.filename}
               </h1>
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-[#10B981]/15 text-[#10B981] border border-[#10B981]/30 flex items-center gap-1">
-                <CheckCircle2 className="w-2.5 h-2.5" />
-                Grounded & Ready
-              </span>
+              <DocumentStatusBadge status={document.status} />
             </div>
             <p className="text-xs text-[#94A3B8] mt-1.5 font-sans leading-relaxed">
               {document.metadata?.summary || 'Authoritative research paper indexed into TalkTalk knowledge vector vault.'}

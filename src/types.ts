@@ -1,4 +1,4 @@
-export type DocumentStatus = 'uploading' | 'processing' | 'indexing' | 'ready' | 'failed';
+export type DocumentStatus = 'uploading' | 'processing' | 'indexing' | 'ready' | 'failed' | 'extraction_failed' | 'needs_ocr';
 
 export type AIMode = 'knowledge' | 'summarize' | 'compare' | 'study' | 'research';
 

@@ -170,85 +170,51 @@ Provide your grounded answer in JSON.`;
     res.json(resultPayload);
   });
 
-  // 2. AI Document Summarizer Endpoint
+  // 2. AI Document Summarizer Endpoint (Proxies to Python backend for hierarchical summarization)
   app.post('/api/ai/summarize', async (req, res) => {
     const startTime = Date.now();
     const { document, summaryType = 'executive' } = req.body;
 
-    if (!document || !document.textContent) {
-      res.status(400).json({ error: 'Document with text content is required' });
+    if (!document || (!document.pages && !document.textContent)) {
+      res.status(400).json({ error: 'Document with text content or pages is required' });
       return;
     }
 
-    addLog('ai_generation_started', `Summarizing document "${document.filename}" (type: ${summaryType})`);
-    const ai = getAI();
-    let summaryResult: any = null;
-
-    if (ai) {
-      try {
-        const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('AI generation timeout')), 9000)
-        );
-
-        const prompt = `Summarize the following document for TalkTalk:
-Document Title: ${document.filename}
-Content:
-${document.textContent.slice(0, 6000)}
-
-Return a JSON object:
-{
-  "summary": "Executive markdown summary with clear paragraphs",
-  "keyTakeaways": ["Key bullet 1", "Key bullet 2", "Key bullet 3"],
-  "sources": [
-    {
-      "document_id": "${document.id}",
-      "document_name": "${document.filename}",
-      "page": 1,
-      "section": "Core Content",
-      "excerpt": "Exact quote from document"
-    }
-  ]
-}`;
-
-        const aiPromise = ai.models.generateContent({
-          model: 'gemini-3.8-flash',
-          contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          config: {
-            responseMimeType: 'application/json',
-            temperature: 0.2,
-          },
-        });
-
-        const response = (await Promise.race([aiPromise, timeoutPromise])) as any;
-        summaryResult = JSON.parse(response.text || '{}');
-      } catch (err: any) {
-        addLog('error', `Gemini summarize failed: ${err.message}`);
+    addLog('ai_generation_started', `Summarizing document "${document.filename}" using Python backend`);
+    
+    try {
+      // Create pages array if not provided
+      let pages = document.pages;
+      if (!pages && document.textContent) {
+         pages = [{ pageNumber: 1, text: document.textContent, source: document.filename }];
       }
-    }
 
-    if (!summaryResult) {
-      summaryResult = {
-        summary: `**${document.filename}** provides authoritative analysis on ${document.metadata?.tags?.join(', ') || 'its domain'}. The document establishes clear empirical foundations, examining primary methodology, quantitative benchmarks, and strategic trade-offs.`,
-        keyTakeaways: [
-          `Establishes quantitative metrics across ${document.metadata?.pages || 12} pages of empirical findings.`,
-          `Highlights core operational efficiencies and architectural parameters.`,
-          `Outlines specific recommendations and constraint validations.`,
-        ],
-        sources: [
-          {
-            document_id: document.id,
-            document_name: document.filename,
-            page: 1,
-            section: 'Executive Overview',
-            excerpt: document.sections?.[0]?.content?.slice(0, 180) || document.textContent.slice(0, 180),
-          },
-        ],
-      };
+      const response = await fetch('http://127.0.0.1:8000/api/documents/summarize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pages, filename: document.filename })
+      });
+      
+      const summaryResult = await response.json();
+      const latencyMs = Date.now() - startTime;
+      
+      if (!response.ok || summaryResult.status === 'failed') {
+          throw new Error(summaryResult.error || 'Failed to generate summary');
+      }
+      
+      addLog('ai_generation_completed', `Document summary generated via Python backend`, null, latencyMs);
+      res.json({ ...summaryResult, latencyMs });
+      
+    } catch (err: any) {
+      addLog('error', `Summarization proxy failed: ${err.message}`);
+      res.json({
+          summary: null,
+          key_points: [],
+          source_pages: [],
+          status: 'failed',
+          error: err.message || 'Summarization failed'
+      });
     }
-
-    const latencyMs = Date.now() - startTime;
-    addLog('ai_generation_completed', `Document summary generated`, null, latencyMs);
-    res.json({ ...summaryResult, latencyMs });
   });
 
   // 3. AI Compare Documents Endpoint

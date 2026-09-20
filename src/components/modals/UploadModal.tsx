@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { X, Upload, FileText, CheckCircle2, AlertCircle, Sparkles, FolderPlus } from 'lucide-react';
+import { X, Upload, FileText, CheckCircle2, AlertCircle, Sparkles, AlertTriangle } from 'lucide-react';
 import { Collection, Document } from '../../types';
+import { extractDocument, buildSections } from '../../utils/pdfExtractor';
 
 interface UploadModalProps {
   isOpen: boolean;
@@ -8,6 +9,18 @@ interface UploadModalProps {
   collections: Collection[];
   onDocumentUploaded: (newDoc: Document) => void;
 }
+
+// Processing stage labels shown in the progress UI
+type ProcessingStage =
+  | 'Uploaded'
+  | 'Extracting'
+  | 'Validating'
+  | 'Chunking'
+  | 'Embedding'
+  | 'Indexing'
+  | 'Grounded & Ready'
+  | 'Extraction failed — document cannot be processed.'
+  | 'Scanned PDF detected — OCR not yet available.';
 
 export const UploadModal: React.FC<UploadModalProps> = ({
   isOpen,
@@ -22,51 +35,158 @@ export const UploadModal: React.FC<UploadModalProps> = ({
   const [activeTab, setActiveTab] = useState<'upload' | 'paste'>('upload');
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
-  const [processingStage, setProcessingStage] = useState('');
+  const [processingStage, setProcessingStage] = useState<ProcessingStage>(
+    'Uploaded'
+  );
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [extractionFailed, setExtractionFailed] = useState(false);
 
   if (!isOpen) return null;
 
   const handleFileChange = (file: File) => {
-    // Validate format
     const validExtensions = ['pdf', 'docx', 'txt', 'md', 'json', 'csv'];
     const extension = file.name.split('.').pop()?.toLowerCase();
     if (!extension || !validExtensions.includes(extension)) {
       setErrorMessage(`Unsupported format .${extension}. Please upload a PDF, DOCX, TXT, or MD.`);
       return;
     }
-
-    // Validate size (max 25MB)
     if (file.size > 25 * 1024 * 1024) {
       setErrorMessage('File size exceeds maximum limit of 25MB.');
       return;
     }
-
     setErrorMessage(null);
+    setExtractionFailed(false);
     setSelectedFile(file);
-    if (!manualTitle) {
-      setManualTitle(file.name);
-    }
+    if (!manualTitle) setManualTitle(file.name);
   };
 
-  const startUploadAndProcessing = async (filename: string, contentText: string, fileSize: number) => {
+  // ─────────────────────────────────────────────────────────
+  // Core upload + extraction pipeline for file uploads
+  // ─────────────────────────────────────────────────────────
+  const processFileUpload = async (file: File) => {
     setIsUploading(true);
-    setUploadProgress(15);
-    setProcessingStage('Uploading document to TalkTalk vault...');
+    setExtractionFailed(false);
+    setUploadProgress(10);
+    setProcessingStage('Uploaded');
+    await new Promise((r) => setTimeout(r, 300));
 
-    await new Promise((r) => setTimeout(r, 400));
+    setUploadProgress(25);
+    setProcessingStage('Extracting');
+
+    let result;
+    try {
+      result = await extractDocument(file);
+    } catch (err: any) {
+      console.error('[TalkTalk] PDF extraction threw an error:', err);
+      setExtractionFailed(true);
+      setProcessingStage('Extraction failed — document cannot be processed.');
+      setUploadProgress(100);
+      setIsUploading(false);
+      setErrorMessage(
+        `PDF extraction failed: ${err.message || 'Unknown error'}. Try re-saving the PDF or converting it to a text-based format.`
+      );
+      return;
+    }
+
     setUploadProgress(50);
-    setProcessingStage('Extracting document sections & optical structure...');
+    setProcessingStage('Validating');
+    await new Promise((r) => setTimeout(r, 200));
 
-    await new Promise((r) => setTimeout(r, 600));
-    setUploadProgress(85);
-    setProcessingStage('Generating embeddings & vector grounding index...');
+    // ── Quality gate ──────────────────────────────────────
+    if (!result.quality.readable) {
+      const isScanned = result.extractionMethod === 'ocr' || result.wordCount < 10;
+      setExtractionFailed(true);
+      setUploadProgress(100);
 
+      if (isScanned) {
+        setProcessingStage('Scanned PDF detected — OCR not yet available.');
+        setIsUploading(false);
+
+        // Still create the document record so the user can see it,
+        // but mark it as needs_ocr so the UI shows the right badge.
+        finaliseDocument(file.name, '', file.size, result.pageCount, 0, 'needs_ocr', []);
+        return;
+      } else {
+        setProcessingStage('Extraction failed — document cannot be processed.');
+        setIsUploading(false);
+        setErrorMessage(result.quality.reason || 'Extraction quality too low. Please upload a text-based PDF.');
+        return;
+      }
+    }
+
+    // ── Sections ──────────────────────────────────────────
+    setUploadProgress(65);
+    setProcessingStage('Chunking');
+    await new Promise((r) => setTimeout(r, 200));
+
+    const tempId = `doc-${Date.now()}`;
+    const sections = buildSections(result.pages, tempId);
+
+    // ── Indexing (simulated — real indexing via Python backend RAG) ───
+    setUploadProgress(80);
+    setProcessingStage('Embedding');
     await new Promise((r) => setTimeout(r, 400));
-    setUploadProgress(100);
-    setProcessingStage('Document indexed and ready for grounded query.');
+    
+    setUploadProgress(90);
+    setProcessingStage('Indexing');
+    await new Promise((r) => setTimeout(r, 200));
 
+    setUploadProgress(100);
+    setProcessingStage('Grounded & Ready');
+    await new Promise((r) => setTimeout(r, 300));
+
+    finaliseDocument(
+      file.name,
+      result.fullText,
+      file.size,
+      result.pageCount,
+      result.wordCount,
+      'ready',
+      sections
+    );
+  };
+
+  // ─────────────────────────────────────────────────────────
+  // Core upload pipeline for pasted text
+  // ─────────────────────────────────────────────────────────
+  const processPastedText = async (title: string, content: string) => {
+    setIsUploading(true);
+    setUploadProgress(30);
+    setProcessingStage('Uploaded');
+    await new Promise((r) => setTimeout(r, 300));
+
+    setUploadProgress(70);
+    setProcessingStage('Chunking');
+    const wordCount = content.split(/\s+/).filter(Boolean).length;
+    const pageCount = Math.max(1, Math.round(content.length / 1500));
+
+    setUploadProgress(100);
+    setProcessingStage('Grounded & Ready');
+    await new Promise((r) => setTimeout(r, 300));
+
+    finaliseDocument(title, content, content.length, pageCount, wordCount, 'ready', [
+      {
+        id: `sec-${Date.now()}-1`,
+        page: 1,
+        title: 'Document Content',
+        content: content.slice(0, 2000),
+      },
+    ]);
+  };
+
+  // ─────────────────────────────────────────────────────────
+  // Build the Document object and hand it to the parent
+  // ─────────────────────────────────────────────────────────
+  const finaliseDocument = (
+    filename: string,
+    textContent: string,
+    fileSize: number,
+    pages: number,
+    wordCount: number,
+    status: Document['status'],
+    sections: Document['sections']
+  ) => {
     const targetCol = collections.find((c) => c.id === targetCollectionId);
 
     const newDoc: Document = {
@@ -76,33 +196,26 @@ export const UploadModal: React.FC<UploadModalProps> = ({
       fileType: filename.split('.').pop()?.toLowerCase() || 'pdf',
       size: fileSize,
       uploadTimestamp: new Date().toISOString(),
-      status: 'ready',
+      status,
       collectionId: targetCollectionId || undefined,
       collectionName: targetCol?.name || 'Unassigned',
       metadata: {
-        pages: Math.max(1, Math.round(contentText.length / 1500)),
-        wordCount: contentText.split(/\s+/).filter(Boolean).length,
+        pages,
+        wordCount,
         language: 'English',
         author: 'Uploaded Document Author',
         tags: ['Grounded Knowledge', targetCol?.name || 'Research'].filter(Boolean),
-        summary: `Document indexed on ${new Date().toLocaleDateString()}. Contains empirical analysis and grounded factual assertions.`,
+        summary: `Document indexed on ${new Date().toLocaleDateString()}. ${
+          status === 'ready'
+            ? `Contains ${wordCount.toLocaleString()} words across ${pages} pages.`
+            : status === 'needs_ocr'
+            ? 'Scanned PDF — OCR extraction required.'
+            : 'Extraction failed — check document quality.'
+        }`,
         mimeType: 'application/pdf',
       },
-      sections: [
-        {
-          id: `sec-${Date.now()}-1`,
-          page: 1,
-          title: 'Executive Overview',
-          content: contentText.slice(0, 500) || 'Primary content overview.',
-        },
-        {
-          id: `sec-${Date.now()}-2`,
-          page: 2,
-          title: 'Detailed Technical Findings',
-          content: contentText.slice(500, 1500) || contentText.slice(0, 500),
-        },
-      ],
-      textContent: contentText,
+      sections,
+      textContent,
     };
 
     onDocumentUploaded(newDoc);
@@ -119,24 +232,22 @@ export const UploadModal: React.FC<UploadModalProps> = ({
         setErrorMessage('Please choose a file to upload.');
         return;
       }
-      // Read file content
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const text = (event.target?.result as string) || `Sample text extracted from ${selectedFile.name}. Key findings, empirical data, and quantitative metrics for grounded AI reasoning.`;
-        startUploadAndProcessing(selectedFile.name, text, selectedFile.size);
-      };
-      reader.onerror = () => {
-        setErrorMessage('Failed to read document file.');
-      };
-      reader.readAsText(selectedFile);
+      await processFileUpload(selectedFile);
     } else {
       if (!manualTitle.trim() || !manualContent.trim()) {
         setErrorMessage('Title and content are required.');
         return;
       }
-      startUploadAndProcessing(manualTitle.trim(), manualContent.trim(), manualContent.length);
+      await processPastedText(manualTitle.trim(), manualContent.trim());
     }
   };
+
+  // ─────────────────────────────────────────────────────────
+  // Determine progress bar colour based on outcome
+  // ─────────────────────────────────────────────────────────
+  const progressGradient = extractionFailed
+    ? 'bg-gradient-to-r from-[#EF4444] to-[#DC2626]'
+    : 'bg-gradient-to-r from-[#6366F1] to-[#06B6D4]';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#0A0D12]/80 backdrop-blur-md animate-in fade-in select-none">
@@ -195,8 +306,14 @@ export const UploadModal: React.FC<UploadModalProps> = ({
 
           {isUploading ? (
             <div className="py-8 text-center space-y-4">
-              <div className="w-12 h-12 mx-auto rounded-2xl bg-[#6366F1]/20 flex items-center justify-center text-[#C0C1FF]">
-                <Sparkles className="w-6 h-6 text-[#6366F1] animate-spin" />
+              <div className={`w-12 h-12 mx-auto rounded-2xl flex items-center justify-center ${
+                extractionFailed ? 'bg-[#EF4444]/20 text-[#FCA5A5]' : 'bg-[#6366F1]/20 text-[#C0C1FF]'
+              }`}>
+                {extractionFailed ? (
+                  <AlertTriangle className="w-6 h-6 text-[#EF4444]" />
+                ) : (
+                  <Sparkles className="w-6 h-6 text-[#6366F1] animate-spin" />
+                )}
               </div>
               <div>
                 <h4 className="text-sm font-semibold text-white">{processingStage}</h4>
@@ -204,7 +321,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
               </div>
               <div className="w-full bg-[#1E232E] h-2 rounded-full overflow-hidden max-w-xs mx-auto">
                 <div
-                  className="bg-gradient-to-r from-[#6366F1] to-[#06B6D4] h-full transition-all duration-300"
+                  className={`${progressGradient} h-full transition-all duration-300`}
                   style={{ width: `${uploadProgress}%` }}
                 />
               </div>
@@ -214,17 +331,12 @@ export const UploadModal: React.FC<UploadModalProps> = ({
               {activeTab === 'upload' ? (
                 /* Drag & Drop */
                 <div
-                  onDragOver={(e) => {
-                    e.preventDefault();
-                    setIsDragging(true);
-                  }}
+                  onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
                   onDragLeave={() => setIsDragging(false)}
                   onDrop={(e) => {
                     e.preventDefault();
                     setIsDragging(false);
-                    if (e.dataTransfer.files?.[0]) {
-                      handleFileChange(e.dataTransfer.files[0]);
-                    }
+                    if (e.dataTransfer.files?.[0]) handleFileChange(e.dataTransfer.files[0]);
                   }}
                   className={`p-6 rounded-2xl border-2 border-dashed transition-all flex flex-col items-center justify-center gap-2 cursor-pointer text-center ${
                     isDragging
@@ -238,14 +350,14 @@ export const UploadModal: React.FC<UploadModalProps> = ({
                     type="file"
                     className="hidden"
                     accept=".pdf,.docx,.txt,.md,.csv"
-                    onChange={(e) => {
-                      if (e.target.files?.[0]) {
-                        handleFileChange(e.target.files[0]);
-                      }
-                    }}
+                    onChange={(e) => { if (e.target.files?.[0]) handleFileChange(e.target.files[0]); }}
                   />
                   <div className="p-3 rounded-2xl bg-[#232833] text-[#C0C1FF]">
-                    <Upload className="w-6 h-6 text-[#6366F1]" />
+                    {selectedFile ? (
+                      <CheckCircle2 className="w-6 h-6 text-[#10B981]" />
+                    ) : (
+                      <Upload className="w-6 h-6 text-[#6366F1]" />
+                    )}
                   </div>
                   <div>
                     <p className="text-xs font-semibold text-white">
@@ -253,7 +365,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
                     </p>
                     <p className="text-[10px] text-[#94A3B8] mt-1">
                       {selectedFile
-                        ? `${(selectedFile.size / 1024 / 1024).toFixed(2)} MB • Ready to index`
+                        ? `${(selectedFile.size / 1024 / 1024).toFixed(2)} MB • Ready to extract`
                         : 'PDF, DOCX, TXT, MD up to 25MB'}
                     </p>
                   </div>
@@ -314,7 +426,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
                   type="submit"
                   className="px-5 py-2 rounded-xl text-xs font-semibold text-white bg-gradient-to-r from-[#6366F1] to-[#8B5CF6] hover:shadow-[0_0_20px_rgba(99,102,241,0.5)] transition-all cursor-pointer"
                 >
-                  Start Grounding & Index
+                  Extract & Index Document
                 </button>
               </div>
             </form>
