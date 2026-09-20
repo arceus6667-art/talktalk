@@ -1,6 +1,24 @@
-export type DocumentStatus = 'uploading' | 'processing' | 'ready' | 'failed';
+export type DocumentStatus = 'uploading' | 'processing' | 'indexing' | 'ready' | 'failed';
 
 export type AIMode = 'knowledge' | 'summarize' | 'compare' | 'study' | 'research';
+
+export type AppRoute =
+  | '/landing'
+  | '/login'
+  | '/signup'
+  | '/onboarding'
+  | '/dashboard'
+  | '/documents'
+  | '/collections'
+  | '/chat'
+  | '/compare'
+  | '/study'
+  | '/research'
+  | '/saved'
+  | '/analytics'
+  | '/settings'
+  | '/profile'
+  | '/document-detail';
 
 export interface User {
   id: string;
@@ -47,6 +65,7 @@ export interface Document {
   processingProgress?: number; // 0 to 100
   collectionId?: string;
   collectionName?: string;
+  tags?: string[];
   metadata: DocumentMetadata;
   sections: DocumentSection[];
   textContent: string;
@@ -82,6 +101,7 @@ export interface Message {
   status?: 'sent' | 'generating' | 'completed' | 'error';
   feedback?: 'like' | 'dislike' | null;
   saved?: boolean;
+  relatedQuestions?: string[];
   tokenCount?: {
     promptTokens: number;
     completionTokens: number;
@@ -174,4 +194,30 @@ export interface ComparisonResult {
   keyContradictions: string[];
   consensusPoints: string[];
   sources: CitationSource[];
+}
+
+export interface AIActivityStep {
+  id: string;
+  title: string;
+  detail: string;
+  status: 'pending' | 'active' | 'in_progress' | 'completed';
+  timestamp?: string;
+  label?: string;
+  icon?: string;
+}
+
+export interface ToastMessage {
+  id: string;
+  type: 'success' | 'error' | 'info' | 'warning';
+  title?: string;
+  text?: string;
+  description?: string;
+  duration?: number;
+}
+
+export interface OnboardingData {
+  workspaceName: string;
+  useCase: string;
+  firstDocUploaded: boolean;
+  completed: boolean;
 }

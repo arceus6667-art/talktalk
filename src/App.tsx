@@ -1,5 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { AppShell, RoutePath } from './components/layout/AppShell';
+import { LandingView } from './components/views/LandingView';
+import { LoginView } from './components/views/LoginView';
+import { SignupView } from './components/views/SignupView';
+import { OnboardingView } from './components/views/OnboardingView';
+import { ProfileView } from './components/views/ProfileView';
+import { SavedAnswersView } from './components/views/SavedAnswersView';
 import { DashboardView } from './components/views/DashboardView';
 import { DocumentsView } from './components/views/DocumentsView';
 import { DocumentDetailView } from './components/views/DocumentDetailView';
@@ -125,7 +131,6 @@ export const App: React.FC = () => {
   // Document Upload Completion Handler
   const handleDocumentUploaded = (newDoc: Document) => {
     setDocuments((prev) => [newDoc, ...prev]);
-    // Update collection count
     if (newDoc.collectionId) {
       setCollections((prev) =>
         prev.map((c) =>
@@ -133,7 +138,6 @@ export const App: React.FC = () => {
         )
       );
     }
-    // Update workspace count
     setActiveWorkspace((prev) => ({
       ...prev,
       documentCount: prev.documentCount + 1,
@@ -152,7 +156,6 @@ export const App: React.FC = () => {
   };
 
   const handleStartChatWithDoc = (doc: Document) => {
-    // Create new conversation focused on this document
     const newConv: Conversation = {
       id: `conv-${Date.now()}`,
       workspaceId: activeWorkspace.id,
@@ -242,7 +245,6 @@ export const App: React.FC = () => {
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
 
-    // Optimistically append user message
     const updatedMessages = [...conv.messages, userMsg];
     setConversations((prev) =>
       prev.map((c) =>
@@ -336,6 +338,33 @@ export const App: React.FC = () => {
       onOpenUpload={() => setIsUploadOpen(true)}
     >
       {/* Route Views */}
+      {currentRoute === '/landing' && (
+        <LandingView onNavigate={handleNavigate} />
+      )}
+
+      {currentRoute === '/login' && (
+        <LoginView
+          onNavigate={handleNavigate}
+          onLoginSuccess={() => setCurrentRoute('/dashboard')}
+        />
+      )}
+
+      {currentRoute === '/signup' && (
+        <SignupView onNavigate={handleNavigate} />
+      )}
+
+      {currentRoute === '/onboarding' && (
+        <OnboardingView onNavigate={handleNavigate} />
+      )}
+
+      {currentRoute === '/profile' && (
+        <ProfileView />
+      )}
+
+      {currentRoute === '/saved' && (
+        <SavedAnswersView onNavigate={handleNavigate} />
+      )}
+
       {currentRoute === '/dashboard' && (
         <DashboardView
           workspace={activeWorkspace}
@@ -399,6 +428,7 @@ export const App: React.FC = () => {
           onNewConversation={handleNewConversation}
           onSendMessage={handleSendMessage}
           onSelectDocumentDetail={handleSelectDocument}
+          onNavigate={handleNavigate}
         />
       )}
 
